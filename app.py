@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import networkx as nx
 from textwrap import dedent
+from datetime import datetime
 
 try:
     from entity_extractor import extract_entities
@@ -544,6 +545,35 @@ entity_icons = {
     "VEHICLE": "▦", "ORGANIZATION": "▣", "EMAIL": "◉",
 }
 
+# Synthetic phone metadata for prototype/demo purposes — shared by the
+# Phone Intelligence page and the Reports module so both read from the
+# same source instead of keeping two copies in sync.
+PHONE_METADATA = {
+    "PH-001": {
+        "OPERATOR": "Demo Telecom",
+        "REGION": "Maharashtra",
+        "NUMBER TYPE": "Mobile",
+        "FIRST OBSERVED": "2026-08-14",
+        "LAST OBSERVED": "2026-08-18",
+    },
+    "PH-002": {
+        "OPERATOR": "Demo Telecom",
+        "REGION": "Maharashtra",
+        "NUMBER TYPE": "Mobile",
+        "FIRST OBSERVED": "2026-08-18",
+        "LAST OBSERVED": "2026-08-20",
+    },
+}
+
+DEFAULT_PHONE_METADATA = {
+    "OPERATOR": "Unknown",
+    "REGION": "Unknown",
+    "NUMBER TYPE": "Unknown",
+    "FIRST OBSERVED": "Unknown",
+    "LAST OBSERVED": "Unknown",
+}
+
+
 relationship_map = {
     ("P-001", "PH-001"): "USES PHONE", ("P-001", "V-001"): "USES VEHICLE",
     ("P-001", "L-001"): "LOCATED AT", ("P-001", "O-001"): "ASSOCIATED WITH",
@@ -566,6 +596,159 @@ def page_header(kicker: str, title: str, subtitle: str):
     <div class="page-subtitle">{subtitle}</div>
     <hr class="hr-hair">
     """)
+
+
+# =========================================================
+# REPORT TEXT BUILDER
+# ---------------------------------------------------------
+# Builds the plain-text version of a generated report, used for
+# both the on-screen "Report Preview" and the downloadable .txt
+# file, so the two always stay identical. Reads from the module
+# -level entities / network_nodes / network_edges / PHONE_METADATA
+# defined above — this function is only called after those exist.
+# =========================================================
+
+def build_report_text(report_type: str, case_reference: str, generated_at: str) -> str:
+    lines = []
+
+    lines.append("CRIMINAL INTELLIGENCE ANALYSIS SYSTEM")
+    lines.append("")
+    lines.append(case_reference)
+    lines.append(report_type)
+    lines.append("")
+    lines.append(f"Generated: {generated_at}")
+    lines.append("Data status: Synthetic / demonstration dataset")
+    lines.append("Status: Draft")
+
+    total_entities = len(entities)
+    total_relationships = len(network_edges)
+    high_priority_count = len(entities[entities["PRIORITY"] == "HIGH"])
+    most_connected = entities.sort_values("CONNECTIONS", ascending=False).iloc[0]
+
+    lines.append("")
+    lines.append("-" * 60)
+    lines.append("CASE OVERVIEW")
+    lines.append("-" * 60)
+
+    if report_type == "Investigation Summary":
+        lines.append(f"Total entities: {total_entities}")
+        lines.append(f"Total relationships: {total_relationships}")
+        lines.append(f"High-priority entities: {high_priority_count}")
+        lines.append("")
+        lines.append("Entity distribution:")
+        for etype, count in entities["TYPE"].value_counts().items():
+            lines.append(f"  {etype:<15}{count}")
+
+    elif report_type == "Entity Intelligence Report":
+        lines.append(f"Total entities: {total_entities}")
+        lines.append(f"High-priority entities: {high_priority_count}")
+        lines.append("")
+        lines.append(f"{'ID':<8}{'NAME':<26}{'TYPE':<14}{'CONN':<6}PRIORITY")
+        for _, row in entities.iterrows():
+            flag = "  *" if row["PRIORITY"] == "HIGH" else ""
+            lines.append(
+                f'{row["ENTITY ID"]:<8}{row["ENTITY"]:<26}{row["TYPE"]:<14}'
+                f'{row["CONNECTIONS"]:<6}{row["PRIORITY"]}{flag}'
+            )
+        lines.append("")
+        lines.append("(* = HIGH analytical priority)")
+
+    elif report_type == "Network Analysis Report":
+        avg_connections = entities["CONNECTIONS"].mean()
+        lines.append(f"Network nodes: {len(network_nodes)}")
+        lines.append(f"Relationships: {total_relationships}")
+        lines.append(f'Most connected entity: {most_connected["ENTITY"]} ({most_connected["TYPE"]})')
+        lines.append(f'Connection count: {most_connected["CONNECTIONS"]}')
+        lines.append("")
+        lines.append(f"Average observed connectivity: {avg_connections:.1f}")
+        lines.append(f'Distinct entity types in network: {entities["TYPE"].nunique()}')
+
+    elif report_type == "Phone Intelligence Report":
+        phone_df = entities[entities["TYPE"] == "PHONE"]
+        lines.append(f"Phone entities: {len(phone_df)}")
+        lines.append("")
+        lines.append(f"{'ID':<8}{'NUMBER':<18}{'CONN':<6}{'PRIORITY':<10}{'OPERATOR':<15}REGION")
+        for _, row in phone_df.iterrows():
+            meta = PHONE_METADATA.get(row["ENTITY ID"], DEFAULT_PHONE_METADATA)
+            lines.append(
+                f'{row["ENTITY ID"]:<8}{row["ENTITY"]:<18}{row["CONNECTIONS"]:<6}'
+                f'{row["PRIORITY"]:<10}{meta["OPERATOR"]:<15}{meta["REGION"]}'
+            )
+
+    relationship_counts = pd.Series(
+        [edge["relationship"] for edge in network_edges]
+    ).value_counts()
+
+    lines.append("")
+    lines.append("-" * 60)
+    lines.append("RELATIONSHIP SUMMARY")
+    lines.append("-" * 60)
+    for rel_type, count in relationship_counts.items():
+        lines.append(f"  {rel_type:<20}{count}")
+
+    lines.append("")
+    lines.append("-" * 60)
+    lines.append("RELATIONSHIP EVIDENCE")
+    lines.append("-" * 60)
+    for edge in network_edges:
+        source_name = network_nodes.get(edge["source"], {}).get("name", edge["source"])
+        target_name = network_nodes.get(edge["target"], {}).get("name", edge["target"])
+        lines.append(f'RELATIONSHIP   {edge["source"]} -> {edge["target"]}  ({source_name} -> {target_name})')
+        lines.append(f'TYPE           {edge["relationship"]}')
+        lines.append(f'SOURCE         {edge["source_type"]}')
+        lines.append(f'EVIDENCE       {edge["evidence"]}')
+        lines.append(f'DATE           {edge["date"]}')
+        lines.append(f'CASE           {edge["case_id"]}')
+        lines.append("")
+
+    phone_count = len(entities[entities["TYPE"] == "PHONE"])
+
+    findings = [
+        f"{total_entities} entities are currently represented in the case dataset.",
+        f"{phone_count} phone entities are present in the observed dataset.",
+        f'{most_connected["ENTITY"]} has the highest observed connection count '
+        f'({most_connected["CONNECTIONS"]}), an analytical indicator that may warrant '
+        f'further investigation.',
+        f'{entities["TYPE"].nunique()} distinct entity types participate in the current network.',
+        f'{high_priority_count} entities carry a HIGH analytical priority flag based on '
+        f'observed relationships within the dataset.',
+    ]
+
+    lines.append("-" * 60)
+    lines.append("ANALYTICAL FINDINGS")
+    lines.append("-" * 60)
+    for item in findings:
+        lines.append(f"- {item}")
+
+    priority_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    sorted_entities = entities.copy()
+    sorted_entities["_rank"] = sorted_entities["PRIORITY"].map(priority_order)
+    sorted_entities = sorted_entities.sort_values(
+        ["_rank", "CONNECTIONS"], ascending=[True, False]
+    )
+
+    lines.append("")
+    lines.append("-" * 60)
+    lines.append("PRIORITY ENTITIES")
+    lines.append("-" * 60)
+    for _, row in sorted_entities.iterrows():
+        lines.append(
+            f'{row["ENTITY ID"]:<8}{row["ENTITY"]:<26}{row["TYPE"]:<14}'
+            f'{row["CONNECTIONS"]:<6}{row["PRIORITY"]}'
+        )
+
+    lines.append("")
+    lines.append("-" * 60)
+    lines.append("ANALYTICAL NOTICE")
+    lines.append("-" * 60)
+    lines.append(
+        "This report contains analytical information derived from the synthetic "
+        "investigation dataset. Entity relationships, connection counts, and "
+        "priority classifications are investigative indicators only. They do not "
+        "establish criminal activity, identity, culpability, or guilt."
+    )
+
+    return "\n".join(lines)
 
 
 # =========================================================
@@ -1326,33 +1509,9 @@ if page == "Phone Intelligence":
                 phone_entities["ENTITY"] == selected_phone
             ].iloc[0]
 
-            # Synthetic metadata for prototype/demo purposes
-            phone_metadata = {
-                "PH-001": {
-                    "OPERATOR": "Demo Telecom",
-                    "REGION": "Maharashtra",
-                    "NUMBER TYPE": "Mobile",
-                    "FIRST OBSERVED": "2026-08-14",
-                    "LAST OBSERVED": "2026-08-18",
-                },
-                "PH-002": {
-                    "OPERATOR": "Demo Telecom",
-                    "REGION": "Maharashtra",
-                    "NUMBER TYPE": "Mobile",
-                    "FIRST OBSERVED": "2026-08-18",
-                    "LAST OBSERVED": "2026-08-20",
-                },
-            }
-
-            metadata = phone_metadata.get(
+            metadata = PHONE_METADATA.get(
                 selected_row["ENTITY ID"],
-                {
-                    "OPERATOR": "Unknown",
-                    "REGION": "Unknown",
-                    "NUMBER TYPE": "Unknown",
-                    "FIRST OBSERVED": "Unknown",
-                    "LAST OBSERVED": "Unknown",
-                }
+                DEFAULT_PHONE_METADATA
             )
 
             render(f"""
@@ -1435,63 +1594,286 @@ if page == "Reports":
 
     if st.button("GENERATE REPORT"):
 
+        # ---------------------------------------------------------
+        # SHARED CALCULATIONS
+        # ---------------------------------------------------------
+        case_reference = "CASE-001"
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+
         total_entities = len(entities)
         total_relationships = len(network_edges)
-        high_priority = len(entities[entities["PRIORITY"] == "HIGH"])
+        high_priority_count = len(entities[entities["PRIORITY"] == "HIGH"])
         entity_types = entities["TYPE"].value_counts()
+        most_connected = entities.sort_values("CONNECTIONS", ascending=False).iloc[0]
 
-        render('<div class="section-label" style="margin-top:26px;">GENERATED REPORT</div>')
+        relationship_counts = pd.Series(
+            [edge["relationship"] for edge in network_edges]
+        ).value_counts()
+
+        priority_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        priority_entities = entities.copy()
+        priority_entities["_rank"] = priority_entities["PRIORITY"].map(priority_order)
+        priority_entities = priority_entities.sort_values(
+            ["_rank", "CONNECTIONS"], ascending=[True, False]
+        ).drop(columns="_rank")
+
+        phone_entities = entities[entities["TYPE"] == "PHONE"].copy()
+
+        # ---------------------------------------------------------
+        # CASE METADATA
+        # ---------------------------------------------------------
+        render('<div class="section-label" style="margin-top:26px;">CASE METADATA</div>')
 
         render(f"""
         <div class="dossier" style="margin-top:14px;">
-            <div class="dossier-tag">INVESTIGATION SUMMARY</div>
-            <div class="field-label">CASE REFERENCE</div>
-            <div class="field-value">CASE-001</div>
-            <div class="field-label" style="margin-top:14px;">REPORT TYPE</div>
+            <div class="dossier-tag">{case_reference}</div>
+            <div class="field-label">REPORT TYPE</div>
             <div class="field-value">{report_type}</div>
-            <div class="field-label" style="margin-top:14px;">TOTAL ENTITIES</div>
-            <div class="field-value">{total_entities}</div>
-            <div class="field-label" style="margin-top:14px;">IDENTIFIED RELATIONSHIPS</div>
-            <div class="field-value">{total_relationships}</div>
-            <div class="field-label" style="margin-top:14px;">HIGH-PRIORITY ENTITIES</div>
-            <div class="field-value">{high_priority}</div>
+            <div class="field-label" style="margin-top:14px;">DATA STATUS</div>
+            <div class="field-value">Synthetic / demonstration dataset</div>
+            <div class="field-label" style="margin-top:14px;">GENERATED</div>
+            <div class="field-value">{generated_at}</div>
+            <div class="field-label" style="margin-top:14px;">STATUS</div>
+            <div class="field-value">Draft</div>
         </div>
         """)
 
-        render('<div class="section-label" style="margin-top:26px;">ENTITY DISTRIBUTION</div>')
+        # ---------------------------------------------------------
+        # CASE OVERVIEW — content depends on the selected report type
+        # ---------------------------------------------------------
+        render('<div class="section-label" style="margin-top:26px;">CASE OVERVIEW</div>')
 
-        # Each row is built as a single line — a blank/whitespace-only line
-        # between rows would otherwise split the surrounding HTML block
-        # (see the render() blocks elsewhere in this file for why).
-        distribution_rows = "".join(
-            f"<tr><td>{entity_type}</td><td>{count}</td></tr>"
-            for entity_type, count in entity_types.items()
+        if report_type == "Investigation Summary":
+
+            render(f"""
+            <div class="dossier" style="margin-top:14px;">
+                <div class="dossier-tag">INVESTIGATION SUMMARY</div>
+                <div class="field-label">CASE REFERENCE</div>
+                <div class="field-value">{case_reference}</div>
+                <div class="field-label" style="margin-top:14px;">TOTAL ENTITIES</div>
+                <div class="field-value">{total_entities}</div>
+                <div class="field-label" style="margin-top:14px;">TOTAL RELATIONSHIPS</div>
+                <div class="field-value">{total_relationships}</div>
+                <div class="field-label" style="margin-top:14px;">HIGH-PRIORITY ENTITIES</div>
+                <div class="field-value">{high_priority_count}</div>
+            </div>
+            """)
+
+            render('<div class="section-label" style="margin-top:22px;">ENTITY DISTRIBUTION</div>')
+
+            distribution_rows = "".join(
+                f"<tr><td>{etype}</td><td>{count}</td></tr>"
+                for etype, count in entity_types.items()
+            )
+
+            render(f"""
+            <div class="dossier" style="margin-top:14px;">
+                <table style="width:100%; border-collapse:collapse; font-family:'JetBrains Mono', monospace; font-size:12px;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left; padding:8px 0;">TYPE</th>
+                            <th style="text-align:left; padding:8px 0;">COUNT</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {distribution_rows}
+                    </tbody>
+                </table>
+            </div>
+            """)
+
+        elif report_type == "Entity Intelligence Report":
+
+            display_entities = entities[
+                ["ENTITY ID", "ENTITY", "TYPE", "CONNECTIONS", "PRIORITY"]
+            ].rename(columns={"ENTITY": "ENTITY NAME", "CONNECTIONS": "CONNECTION COUNT"})
+
+            def _highlight_high_priority(row):
+                if row["PRIORITY"] == "HIGH":
+                    return ["background-color: rgba(163,69,61,0.28)"] * len(row)
+                return [""] * len(row)
+
+            styled_entities = display_entities.style.apply(_highlight_high_priority, axis=1)
+            st.dataframe(styled_entities, use_container_width=True, hide_index=True)
+            st.caption("Rows highlighted in red carry a HIGH analytical priority flag.")
+
+        elif report_type == "Network Analysis Report":
+
+            avg_connections = entities["CONNECTIONS"].mean()
+            distinct_types = entities["TYPE"].nunique()
+
+            render(f"""
+            <div class="dossier" style="margin-top:14px;">
+                <div class="dossier-tag">NETWORK ANALYSIS</div>
+                <div class="field-label">NETWORK NODES</div>
+                <div class="field-value">{len(network_nodes)}</div>
+                <div class="field-label" style="margin-top:14px;">RELATIONSHIPS</div>
+                <div class="field-value">{total_relationships}</div>
+                <div class="field-label" style="margin-top:14px;">MOST CONNECTED ENTITY</div>
+                <div class="field-value">{most_connected["ENTITY"]} ({most_connected["TYPE"]})</div>
+                <div class="field-label" style="margin-top:14px;">CONNECTION COUNT</div>
+                <div class="field-value">{most_connected["CONNECTIONS"]}</div>
+            </div>
+            """)
+
+            render(f"""
+            <div class="dossier" style="margin-top:14px;">
+                <div class="dossier-tag">NETWORK-LEVEL OBSERVATIONS</div>
+                <div class="field-value" style="font-size:12.5px;">
+                    Average observed connectivity across entities is {avg_connections:.1f}.
+                    {distinct_types} distinct entity types participate in the current network,
+                    indicating a multi-modal case structure linking persons, communications,
+                    and supporting records.
+                </div>
+            </div>
+            """)
+
+        elif report_type == "Phone Intelligence Report":
+
+            phone_rows = []
+            for _, row in phone_entities.iterrows():
+                meta = PHONE_METADATA.get(row["ENTITY ID"], DEFAULT_PHONE_METADATA)
+                phone_rows.append({
+                    "ENTITY ID": row["ENTITY ID"],
+                    "PHONE NUMBER": row["ENTITY"],
+                    "CONNECTIONS": row["CONNECTIONS"],
+                    "PRIORITY": row["PRIORITY"],
+                    "OPERATOR": meta["OPERATOR"],
+                    "REGION": meta["REGION"],
+                    "NUMBER TYPE": meta["NUMBER TYPE"],
+                    "FIRST OBSERVED": meta["FIRST OBSERVED"],
+                    "LAST OBSERVED": meta["LAST OBSERVED"],
+                })
+
+            phone_report_df = pd.DataFrame(phone_rows)
+
+            if not phone_report_df.empty:
+                st.dataframe(phone_report_df, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No phone entities are available in the current dataset.")
+
+        # ---------------------------------------------------------
+        # RELATIONSHIP SUMMARY
+        # ---------------------------------------------------------
+        render('<div class="section-label" style="margin-top:26px;">RELATIONSHIP SUMMARY</div>')
+
+        relationship_rows = "".join(
+            f"<tr><td>{rel_type}</td><td>{count}</td></tr>"
+            for rel_type, count in relationship_counts.items()
         )
 
         render(f"""
         <div class="dossier" style="margin-top:14px;">
-            <div class="dossier-tag">ENTITY BREAKDOWN</div>
             <table style="width:100%; border-collapse:collapse; font-family:'JetBrains Mono', monospace; font-size:12px;">
                 <thead>
                     <tr>
-                        <th style="text-align:left; padding:8px 0;">TYPE</th>
+                        <th style="text-align:left; padding:8px 0;">RELATIONSHIP TYPE</th>
                         <th style="text-align:left; padding:8px 0;">COUNT</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {distribution_rows}
+                    {relationship_rows}
                 </tbody>
             </table>
         </div>
         """)
 
+        # ---------------------------------------------------------
+        # RELATIONSHIP EVIDENCE — why the system thinks entities are
+        # connected, sourced directly from network_edges.
+        # ---------------------------------------------------------
+        render('<div class="section-label" style="margin-top:26px;">RELATIONSHIP EVIDENCE</div>')
+
+        evidence_records = []
+        for edge in network_edges:
+            source_name = network_nodes.get(edge["source"], {}).get("name", edge["source"])
+            target_name = network_nodes.get(edge["target"], {}).get("name", edge["target"])
+            evidence_records.append({
+                "RELATIONSHIP": f'{edge["source"]} → {edge["target"]}',
+                "ENTITIES": f'{source_name} → {target_name}',
+                "TYPE": edge["relationship"],
+                "SOURCE": edge["source_type"],
+                "EVIDENCE": edge["evidence"],
+                "DATE": edge["date"],
+                "CASE": edge["case_id"],
+            })
+
+        st.dataframe(pd.DataFrame(evidence_records), use_container_width=True, hide_index=True)
+
+        # ---------------------------------------------------------
+        # ANALYTICAL FINDINGS
+        # ---------------------------------------------------------
+        render('<div class="section-label" style="margin-top:26px;">ANALYTICAL FINDINGS</div>')
+
+        phone_count = len(phone_entities)
+        findings = [
+            f"{total_entities} entities are currently represented in the case dataset.",
+            f"{phone_count} phone entities are present in the observed dataset.",
+            f'{most_connected["ENTITY"]} has the highest observed connection count '
+            f'({most_connected["CONNECTIONS"]}), an analytical indicator that may warrant '
+            f'further investigation.',
+            f'{entities["TYPE"].nunique()} distinct entity types participate in the current '
+            f'network, indicating multiple associated data sources.',
+            f'{high_priority_count} entities carry a HIGH analytical priority flag based on '
+            f'observed relationships within the dataset.',
+        ]
+
+        findings_html = "".join(f"<li>{item}</li>" for item in findings)
+
         render(f"""
+        <div class="dossier" style="margin-top:14px;">
+            <ul style="margin:0; padding-left:18px; font-size:12.5px; line-height:1.9;">
+                {findings_html}
+            </ul>
+        </div>
+        """)
+
+        # ---------------------------------------------------------
+        # PRIORITY ENTITIES
+        # ---------------------------------------------------------
+        render('<div class="section-label" style="margin-top:26px;">PRIORITY ENTITIES</div>')
+
+        st.dataframe(
+            priority_entities[["ENTITY ID", "ENTITY", "TYPE", "CONNECTIONS", "PRIORITY"]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # ---------------------------------------------------------
+        # REPORT PREVIEW
+        # ---------------------------------------------------------
+        render('<div class="section-label" style="margin-top:26px;">REPORT PREVIEW</div>')
+
+        report_text = build_report_text(
+            report_type=report_type,
+            case_reference=case_reference,
+            generated_at=generated_at,
+        )
+
+        st.code(report_text, language=None)
+
+        # ---------------------------------------------------------
+        # DOWNLOAD REPORT
+        # ---------------------------------------------------------
+        safe_report_name = report_type.replace(" ", "_")
+        st.download_button(
+            "DOWNLOAD REPORT",
+            data=report_text,
+            file_name=f"{case_reference}_{safe_report_name}.txt",
+            mime="text/plain"
+        )
+
+        # ---------------------------------------------------------
+        # ANALYTICAL NOTICE
+        # ---------------------------------------------------------
+        render("""
         <div class="dossier" style="margin-top:20px;">
             <div class="dossier-tag">ANALYTICAL NOTICE</div>
             <div class="field-value" style="font-size:12px; color:var(--muted);">
-                This report summarizes analytical signals contained within the
-                synthetic investigation dataset. Relationships and priority
-                levels do not establish criminal activity or guilt.
+                This report contains analytical information derived from the synthetic
+                investigation dataset. Entity relationships, connection counts, and
+                priority classifications are investigative indicators only. They do not
+                establish criminal activity, identity, culpability, or guilt.
             </div>
         </div>
         """)
